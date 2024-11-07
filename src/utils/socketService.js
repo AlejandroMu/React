@@ -1,81 +1,81 @@
-// src/stompService.js
-import { Client } from '@stomp/stompjs';
+// stompClient.js
 import SockJS from 'sockjs-client';
+import * as webstomp from 'webstomp-client';
 
-class StompService {
-    constructor(url) {
-        this.client = null;
-        this.callbacks = {};
-        this.isConnect = false;
-        if (url) {
-            this.connect(url);
+export class StompClient {
+
+  constructor (url, onConnect, onDisconnect) {
+    this.url = url;
+    this.onConnect = onConnect;
+    this.onDisconnect = onDisconnect;
+    this.connected = false;
+    this.socket = null;
+    this.client = null;
+    this.callbacks = {};
+  }
+
+  connect (headers = {}) {
+    if (this.connected) {
+      return;
+    }
+    this.socket = new SockJS(this.url);
+    this.client = webstomp.over(this.socket, { debug: false });
+    this.client.connect(
+      headers,
+      () => {
+        this.connected = true;
+        if (this.onConnect) {
+          this.onConnect(this);
         }
-    }
-
-    connect(url) {
-        this.client = new Client({
-            webSocketFactory: () => {
-                return new SockJS(url);
-            },
-            debug: (str) => { console.log(str); },
-            onConnect: () => {
-                console.log('Conectado a WebSocket');
-                this.isConnect = true;
-                this.processSubscriptions();
-            },
-            onStompError: (frame) => {
-                console.error('Error en STOMP: ' + frame.headers['message']);
-            },
-        });
-
-        this.client.activate(); // Activa el cliente STOMP
-    }
-
-    disconnect() {
-        if (this.client) {
-            this.client.deactivate();
+      },
+      () => {
+        this.connected = false;
+        if (this.onDisconnect) {
+          this.onDisconnect(this);
         }
-    }
+      }
+    );
+  }
 
-    unsubscribe(destination) {
-        if (this.callbacks[destination] && this.isConnect) {
+  disconnect () {
+    if (!this.connected) {
+      return;
+    }
+    this.client.disconnect(() => {
+      this.connected = false;
+    });
+  }
+
+  subscribe (destination, callback) {
+    if (!this.connected) {
+      this.callbacks[destination] = callback;
+    }else{
+        return this.client.subscribe(destination, callback);
+    }
+  }
+
+    unsubscribe (destination) {
+        if (this.connected) {
             delete this.callbacks[destination];
             this.client.unsubscribe(destination);
         }
     }
 
-    subscribe(destination, callback) {
-        return new Promise((resolve, reject) => {
-            this.callbacks[destination] = callback;
-            if (this.isConnect) {
-                this.client.subscribe(destination, (msg) => {
-                    const message = JSON.parse(msg.body);
-                    callback(message);
-                });
-                resolve();
-            }else{
-                reject('No conectado');
-            }
-        });
+  send (destination, body, headers = {}) {
+    if (!this.connected) {
+      throw new Error('Client not connected');
     }
-
-    processSubscriptions() {
-        if (!this.isConnect) {
-            return;
-        }
-
-        Object.keys(this.callbacks).forEach((destination) => {
-            this.client.subscribe(destination, (msg) => {
-                const message = JSON.parse(msg.body);
-                this.callbacks[destination](message);
-            });
-        });
-    }
-
-    publish(destination, message) {
-        this.client.publish({ destination, body: JSON.stringify(message) });
-    }
+    this.client.send(destination, body, headers);
+  }
 }
 
-const stompService = new StompService('http://localhost:8080/ws-connect-sj');
-export default stompService;
+const stompClient = new StompClient('http://localhost:8081/api/ws-connect-sj', () => {
+  console.log('Connected');
+}, () => {
+  console.log('Disconnected');
+});
+stompClient.connect({
+    'Authorization': 'Bearer ' + localStorage.getItem('token')
+});
+
+export default stompClient;
